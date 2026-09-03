@@ -1,0 +1,17 @@
+[Unit]
+Description=InnerOS DMX & Art-Net Universal Engine & Intent API
+After=network.target
+
+[Service]
+Type=simple
+User=rlopez
+WorkingDirectory=/home/rlopez/projects/inneros-dmx-engine
+ExecStart=/usr/bin/python3 -m src.api_server
+Restart=always
+RestartSec=3
+Environment=DMX_NODE_IP=192.168.1.10
+Environment=DMX_UNIVERSE=0
+Environment=DMX_API_PORT=8096
+
+[Install]
+WantedBy=multi-user.target
