@@ -151,3 +151,37 @@ def get_scene(name: str, path: str | os.PathLike[str] | None = None) -> dict[str
 def list_scene_names(path: str | os.PathLike[str] | None = None) -> list[str]:
     scenes, _ = load_scene_registry(path)
     return sorted(scenes)
+
+
+def register_scene(
+    name: str,
+    definition: Any,
+    path: str | os.PathLike[str] | None = None,
+    *,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Validate and atomically persist one dynamic scene into the live registry."""
+    normalized_name = str(name or "").strip().lower()
+    valid, validation_errors = validate_scene(normalized_name, definition)
+    if not valid:
+        return {"ok": False, "error": "scene_validation_failed", "errors": validation_errors}
+
+    scenes, registry_errors = load_scene_registry(path)
+    if registry_errors:
+        return {"ok": False, "error": "scene_registry_invalid", "errors": registry_errors}
+    if normalized_name in scenes and not overwrite:
+        return {"ok": False, "error": "scene_already_exists", "scene": normalized_name}
+
+    scenes[normalized_name] = valid
+    file_path = registry_path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = file_path.with_name(f".{file_path.name}.{os.getpid()}.tmp")
+    payload = {"scenes": {key: scenes[key] for key in sorted(scenes)}}
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp_path, file_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+    return {"ok": True, "scene": normalized_name, "definition": valid}

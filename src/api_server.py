@@ -14,7 +14,7 @@ import os
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from .effects_engine import DynamicEffectsRunner
-from .scene_registry import get_scene, load_scene_registry
+from .scene_registry import get_scene, load_scene_registry, register_scene
 
 HOST = os.getenv("DMX_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("DMX_API_PORT", "18796"))
@@ -152,7 +152,28 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
 
         path = self.path.split("?")[0]
 
-        if path == "/api/blackout":
+        if path == "/api/scenes/register":
+            name = str(body.get("name", "")).strip().lower()
+            definition = body.get("scene")
+            if name in PUBLIC_BUILTIN_SCENES:
+                self._send_json(409, {"ok": False, "error": "reserved_scene_name", "scene": name})
+                return
+            result = register_scene(name, definition, overwrite=False)
+            if not result.get("ok"):
+                status = 409 if result.get("error") == "scene_already_exists" else 400
+                self._send_json(status, result)
+                return
+            supported, catalog, _ = scene_catalog()
+            self._send_json(201, {
+                "ok": True,
+                "action": "scene_registered",
+                "scene": result["scene"],
+                "definition": result["definition"],
+                "supported_scenes": supported,
+                "dynamic_scenes": catalog,
+            })
+
+        elif path == "/api/blackout":
             runner.blackout()
             self._send_json(200, {"ok": True, "action": "blackout"})
 
