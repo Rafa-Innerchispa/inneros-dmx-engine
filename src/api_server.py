@@ -14,25 +14,14 @@ import os
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from .effects_engine import DynamicEffectsRunner
-from .scene_registry import get_scene, load_scene_registry
+from .scene_registry import get_scene, load_scene_registry, register_scene
 
 HOST = os.getenv("DMX_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("DMX_API_PORT", "18796"))
 CORS_ORIGIN = os.getenv("DMX_CORS_ORIGIN", "http://127.0.0.1").strip() or "http://127.0.0.1"
 EXPOSE_TOPOLOGY = os.getenv("DMX_EXPOSE_TOPOLOGY", "0").strip().lower() in {"1", "true", "yes"}
 
-# Public-safe built-ins. Raw DMX channels and fast strobe effects are intentionally
-# not exposed as public scene names.
-PUBLIC_BUILTIN_SCENES = [
-    "rainbow",
-    "frenzy",
-    "police",
-    "fire",
-    "chill_lounge",
-    "morado_uv",
-    "rojo_sangre",
-    "blackout",
-]
+PUBLIC_BUILTIN_SCENES = ["rainbow", "frenzy", "police", "fire", "chill_lounge", "morado_uv", "rojo_sangre", "blackout"]
 STATIC_SCENE_ALIASES = {
     "morado_uv": ("morado", "todas", 255),
     "rojo_sangre": ("rojo", "todas", 255),
@@ -51,18 +40,11 @@ def scene_catalog() -> tuple[list[str], dict, list[dict]]:
     for name in sorted(dynamic):
         if name not in names:
             names.append(name)
-    catalog = {
-        name: {
-            "label": dynamic[name].get("label", name.replace("_", " ").title()),
-            "dynamic": True,
-        }
-        for name in dynamic
-    }
+    catalog = {name: {"label": dynamic[name].get("label", name.replace("_", " ").title()), "dynamic": True} for name in dynamic}
     return names, catalog, errors
 
 
 def status_payload() -> dict:
-    """Return health and hot-reloaded capabilities with topology hidden by default."""
     supported_scenes, dynamic_catalog, registry_errors = scene_catalog()
     payload = {
         "ok": True,
@@ -83,7 +65,6 @@ def status_payload() -> dict:
 
 
 def execute_dynamic_scene(scene_name: str, definition: dict) -> dict:
-    """Execute a previously validated declarative scene synchronously and bounded."""
     runner.stop_current_effect()
     runner.current_effect = scene_name
     runner.running = True
@@ -97,26 +78,14 @@ def execute_dynamic_scene(scene_name: str, definition: dict) -> dict:
                 if color == "blackout" or brightness <= 0:
                     runner.engine.scene_blackout()
                 else:
-                    runner.apply_static_scene(
-                        color_name=color,
-                        brightness=brightness,
-                        target=target,
-                    )
-                    # apply_static_scene stops background effects; this scene is the
-                    # active synchronous execution, so restore truthful running state.
+                    runner.apply_static_scene(color_name=color, brightness=brightness, target=target)
                     runner.current_effect = scene_name
                     runner.running = True
                 executed_steps += 1
                 time.sleep(int(step["duration_ms"]) / 1000.0)
     finally:
         runner.running = False
-    return {
-        "ok": True,
-        "effect": scene_name,
-        "dynamic": True,
-        "executed_steps": executed_steps,
-        "label": definition.get("label", scene_name),
-    }
+    return {"ok": True, "effect": scene_name, "dynamic": True, "executed_steps": executed_steps, "label": definition.get("label", scene_name)}
 
 
 class DMXAPIHandler(BaseHTTPRequestHandler):
@@ -130,7 +99,6 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(payload).encode("utf-8"))
 
     def log_message(self, format, *args):
-        # Keep the local service quiet; systemd captures startup/runtime errors.
         return
 
     def do_OPTIONS(self):
@@ -149,17 +117,34 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             body = json.loads(post_data)
         except Exception:
             body = {}
-
         path = self.path.split("?")[0]
 
-        if path == "/api/blackout":
+        if path == "/api/scenes/register":
+            name = str(body.get("name", "")).strip().lower()
+            definition = body.get("scene")
+            if name in PUBLIC_BUILTIN_SCENES:
+                self._send_json(409, {"ok": False, "error": "reserved_scene_name", "scene": name})
+                return
+            result = register_scene(name, definition, overwrite=False)
+            if not result.get("ok"):
+                status = 409 if result.get("error") == "scene_already_exists" else 400
+                self._send_json(status, result)
+                return
+            supported, catalog, _ = scene_catalog()
+            self._send_json(201, {
+                "ok": True,
+                "action": "scene_registered",
+                "scene": result["scene"],
+                "definition": result["definition"],
+                "supported_scenes": supported,
+                "dynamic_scenes": catalog,
+            })
+        elif path == "/api/blackout":
             runner.blackout()
             self._send_json(200, {"ok": True, "action": "blackout"})
-
         elif path in {"/api/effect", "/api/scene"}:
             mode = str(body.get("mode") or body.get("effect", "rainbow")).strip().lower()
             speed = float(body.get("speed", 1.0))
-
             dynamic = get_scene(mode)
             if dynamic:
                 self._send_json(200, execute_dynamic_scene(mode, dynamic))
@@ -176,47 +161,37 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             else:
                 supported, _, _ = scene_catalog()
                 self._send_json(400, {"ok": False, "error": "scene_not_supported", "supported_scenes": supported})
-
         elif path == "/api/color":
             color = body.get("color", "blanco")
             target = body.get("target", "todas")
             brightness = int(body.get("brightness", 255))
             runner.apply_static_scene(color_name=color, brightness=brightness, target=target)
             self._send_json(200, {"ok": True, "color": color, "target": target, "brightness": brightness})
-
         elif path == "/api/intent":
             text = body.get("text", "").lower()
             self._send_json(200, self._parse_intent(text))
-
         else:
             self._send_json(404, {"error": "Invalid POST endpoint"})
 
     def _parse_intent(self, text: str) -> dict:
-        """Interpreta intenciones habladas en español."""
         if any(w in text for w in ["apaga", "apagar", "blackout", "oscuro"]):
             runner.blackout()
             return {"ok": True, "parsed_action": "blackout", "text": text}
-
         if any(w in text for w in ["arcoiris", "arco iris", "rainbow"]):
             runner.start_effect("rainbow", speed=1.0)
             return {"ok": True, "parsed_action": "effect:rainbow", "text": text}
-
         if any(w in text for w in ["fiesta", "frenzy", "disco", "loco", "bailar"]):
             runner.start_effect("frenzy", speed=1.0)
             return {"ok": True, "parsed_action": "effect:frenzy", "text": text}
-
         if any(w in text for w in ["policia", "policial", "patrulla", "alarma", "emergencia"]):
             runner.start_effect("police")
             return {"ok": True, "parsed_action": "effect:police", "text": text}
-
         if any(w in text for w in ["fuego", "chimenea", "fogata", "flama"]):
             runner.start_effect("fire")
             return {"ok": True, "parsed_action": "effect:fire", "text": text}
-
         if any(w in text for w in ["relax", "lounge", "tranquilo", "suave", "chill"]):
             runner.start_effect("chill_lounge")
             return {"ok": True, "parsed_action": "effect:chill_lounge", "text": text}
-
         target = "todas"
         if "pulpo" in text:
             target = "pulpos"
@@ -226,16 +201,10 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             target = "tachos"
         elif "bola" in text:
             target = "bola_disco"
-
-        for col in [
-            "rojo", "verde", "azul", "amarillo", "magenta", "fucsia", "cian", "celeste",
-            "turquesa", "naranja", "ambar", "dorado", "violeta", "morado", "purpura", "rosa",
-            "rosado", "lima", "blanco", "neon", "cyberpunk",
-        ]:
+        for col in ["rojo", "verde", "azul", "amarillo", "magenta", "fucsia", "cian", "celeste", "turquesa", "naranja", "ambar", "dorado", "violeta", "morado", "purpura", "rosa", "rosado", "lima", "blanco", "neon", "cyberpunk"]:
             if col in text:
                 runner.apply_static_scene(color_name=col, brightness=255, target=target)
                 return {"ok": True, "parsed_action": f"color:{col}", "target": target, "text": text}
-
         runner.apply_static_scene(color_name="blanco_calido", brightness=255, target=target)
         return {"ok": True, "parsed_action": "color:blanco_calido", "target": target, "text": text}
 
