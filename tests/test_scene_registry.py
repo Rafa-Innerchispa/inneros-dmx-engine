@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src import api_server
-from src.scene_registry import get_scene, load_scene_registry
+from src.scene_registry import get_scene, load_scene_registry, register_scene
 
 
 class TestSceneRegistry(unittest.TestCase):
@@ -22,44 +22,20 @@ class TestSceneRegistry(unittest.TestCase):
         self.assertEqual(scenes["flash_all_demo"]["steps"][0]["duration_ms"], 650)
 
     def test_hot_reload_reads_file_each_call(self):
-        path = self._write_registry({
-            "scenes": {
-                "first_scene": {
-                    "label": "First",
-                    "loops": 1,
-                    "steps": [{"target": "all", "color": "blanco", "brightness": 120, "duration_ms": 500}],
-                }
-            }
-        })
+        path = self._write_registry({"scenes": {"first_scene": {"label": "First", "loops": 1, "steps": [{"target": "all", "color": "blanco", "brightness": 120, "duration_ms": 500}]}}})
         try:
             self.assertIsNotNone(get_scene("first_scene", path))
-            path.write_text(json.dumps({
-                "scenes": {
-                    "second_scene": {
-                        "label": "Second",
-                        "loops": 1,
-                        "steps": [{"target": "tachos", "color": "azul", "brightness": 100, "duration_ms": 200}],
-                    }
-                }
-            }), encoding="utf-8")
+            path.write_text(json.dumps({"scenes": {"second_scene": {"label": "Second", "loops": 1, "steps": [{"target": "tachos", "color": "azul", "brightness": 100, "duration_ms": 200}]}}}), encoding="utf-8")
             self.assertIsNone(get_scene("first_scene", path))
             self.assertIsNotNone(get_scene("second_scene", path))
         finally:
             path.unlink(missing_ok=True)
 
     def test_rejects_fast_full_stage_flash(self):
-        path = self._write_registry({
-            "scenes": {
-                "unsafe_flash": {
-                    "label": "Unsafe",
-                    "loops": 4,
-                    "steps": [
-                        {"target": "all", "color": "blanco", "brightness": 255, "duration_ms": 100},
-                        {"target": "all", "color": "blackout", "brightness": 0, "duration_ms": 100},
-                    ],
-                }
-            }
-        })
+        path = self._write_registry({"scenes": {"unsafe_flash": {"label": "Unsafe", "loops": 4, "steps": [
+            {"target": "all", "color": "blanco", "brightness": 255, "duration_ms": 100},
+            {"target": "all", "color": "blackout", "brightness": 0, "duration_ms": 100},
+        ]}}})
         try:
             scenes, errors = load_scene_registry(path)
             self.assertNotIn("unsafe_flash", scenes)
@@ -75,25 +51,44 @@ class TestSceneRegistry(unittest.TestCase):
         self.assertEqual(payload["dynamic_scenes"]["flash_all_demo"]["label"], "Flash All Demo")
 
     def test_dynamic_execution_uses_only_high_level_runner_calls(self):
-        scene = {
-            "label": "Bounded Test",
-            "loops": 1,
-            "steps": [
-                {"target": "tachos", "color": "azul", "brightness": 90, "duration_ms": 150},
-                {"target": "all", "color": "blackout", "brightness": 0, "duration_ms": 500},
-            ],
-        }
-        with patch.object(api_server.runner, "stop_current_effect"), \
-             patch.object(api_server.runner, "apply_static_scene") as apply_static, \
-             patch.object(api_server.runner.engine, "scene_blackout") as blackout, \
-             patch.object(api_server.time, "sleep"):
+        scene = {"label": "Bounded Test", "loops": 1, "steps": [
+            {"target": "tachos", "color": "azul", "brightness": 90, "duration_ms": 150},
+            {"target": "all", "color": "blackout", "brightness": 0, "duration_ms": 500},
+        ]}
+        with patch.object(api_server.runner, "stop_current_effect"), patch.object(api_server.runner, "apply_static_scene") as apply_static, patch.object(api_server.runner.engine, "scene_blackout") as blackout, patch.object(api_server.time, "sleep"):
             result = api_server.execute_dynamic_scene("bounded_test", scene)
-
         self.assertTrue(result["ok"])
         self.assertEqual(result["executed_steps"], 2)
         apply_static.assert_called_once_with(color_name="azul", brightness=90, target="tachos")
         blackout.assert_called_once_with()
         self.assertFalse(api_server.runner.running)
+
+    def test_register_scene_persists_and_is_hot_discoverable(self):
+        path = self._write_registry({"scenes": {}})
+        definition = {"label": "Aurora Test", "loops": 2, "steps": [
+            {"target": "all", "color": "morado", "brightness": 180, "duration_ms": 650},
+            {"target": "all", "color": "azul", "brightness": 160, "duration_ms": 650},
+        ]}
+        try:
+            result = register_scene("aurora_test", definition, path)
+            self.assertTrue(result["ok"])
+            scenes, errors = load_scene_registry(path)
+            self.assertEqual(errors, [])
+            self.assertIn("aurora_test", scenes)
+            self.assertEqual(scenes["aurora_test"]["label"], "Aurora Test")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_register_scene_rejects_duplicate_without_overwrite(self):
+        path = self._write_registry({"scenes": {}})
+        definition = {"label": "One", "loops": 1, "steps": [{"target": "all", "color": "azul", "brightness": 100, "duration_ms": 500}]}
+        try:
+            self.assertTrue(register_scene("duplicate_scene", definition, path)["ok"])
+            second = register_scene("duplicate_scene", definition, path)
+            self.assertFalse(second["ok"])
+            self.assertEqual(second["error"], "scene_already_exists")
+        finally:
+            path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
