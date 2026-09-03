@@ -1,0 +1,12 @@
+{
+  "scenes": {
+    "flash_all_demo": {
+      "label": "Flash All Demo",
+      "loops": 4,
+      "steps": [
+        {"target": "all", "color": "blanco", "brightness": 255, "duration_ms": 650},
+        {"target": "all", "color": "blackout", "brightness": 0, "duration_ms": 650}
+      ]
+    }
+  }
+}
