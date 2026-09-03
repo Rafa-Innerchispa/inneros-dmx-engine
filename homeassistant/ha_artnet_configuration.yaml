@@ -1,0 +1,207 @@
+# ==============================================================================
+# INNEROS DMX & ART-NET CONFIGURATION FOR HOME ASSISTANT
+# Target Node: Pknight CR011R (IP: 192.168.1.10)
+# Integration: ha-artnet-led (jarnyg/ha-artnet-led)
+# ==============================================================================
+
+light:
+  - platform: artnet_led
+    host: 192.168.1.10
+    port: 6454
+    max_fps: 30
+    refresh_interval: 2
+    node_type: artnet-direct
+    universes:
+      0:
+        send_partial_universe: true
+        devices:
+          # 1. Pulpo 1 (Eurolite EL-LMH1240WB, 19ch | Base: 1)
+          - channel: 1
+            name: "Pulpo 1 Pan"
+            type: dimmer
+          - channel: 2
+            name: "Pulpo 1 Pan Fine"
+            type: dimmer
+          - channel: 3
+            name: "Pulpo 1 Tilt"
+            type: dimmer
+          - channel: 4
+            name: "Pulpo 1 Tilt Fine"
+            type: dimmer
+          - channel: 5
+            name: "Pulpo 1 Tilt Infinite Rot"
+            type: dimmer
+          - channel: 6
+            name: "Pulpo 1 Motor Speed"
+            type: dimmer
+          - channel: 7
+            name: "Pulpo 1 Master Dimmer"
+            type: dimmer
+          - channel: 8
+            name: "Pulpo 1 Strobe"
+            type: dimmer
+          - channel: 9
+            name: "Pulpo 1 Barra 1 RGBW"
+            type: rgbw
+          - channel: 13
+            name: "Pulpo 1 Barra 2 RGBW"
+            type: rgbw
+          - channel: 17
+            name: "Pulpo 1 Macro Effect"
+            type: dimmer
+          - channel: 18
+            name: "Pulpo 1 Effect Speed"
+            type: dimmer
+          - channel: 19
+            name: "Pulpo 1 Reset"
+            type: dimmer
+
+          # 2. Beam 01 (Mini Beam RGBW 12W 4-en-1, 6ch | Base: 20)
+          - channel: 20
+            name: "Beam 01"
+            type: dsrgbw
+          - channel: 21
+            name: "Beam 01 Strobe Canal"
+            type: dimmer
+
+          # 3. Tacho Escalera (LED PAR 18x1W RGB, 7ch | Base: 26)
+          - channel: 26
+            name: "Tacho Escalera"
+            type: drgb
+          - channel: 30
+            name: "Tacho Escalera Strobe Canal"
+            type: dimmer
+          - channel: 31
+            name: "Tacho Escalera Macro Canal"
+            type: dimmer
+
+          # 4. Tacho Peces (LED PAR 18x1W RGB, 7ch | Base: 33)
+          - channel: 33
+            name: "Tacho Peces"
+            type: drgb
+          - channel: 37
+            name: "Tacho Peces Strobe Canal"
+            type: dimmer
+          - channel: 38
+            name: "Tacho Peces Macro Canal"
+            type: dimmer
+
+          # 5. Tacho Central (Mini PAR 3x4W RGBW + Flash, 8ch | Base: 40)
+          - channel: 40
+            name: "Tacho Central"
+            type: drgbw
+          - channel: 45
+            name: "Tacho Central Strobe Mode"
+            type: dimmer
+          - channel: 46
+            name: "Tacho Central Strobe Speed"
+            type: dimmer
+
+          # 6. Tacho Plantas (LED PAR 18x1W RGB, 7ch | Base: 48)
+          - channel: 48
+            name: "Tacho Plantas"
+            type: drgb
+          - channel: 52
+            name: "Tacho Plantas Strobe Canal"
+            type: dimmer
+          - channel: 53
+            name: "Tacho Plantas Macro Canal"
+            type: dimmer
+
+          # 7. Bola Disco (Crystal LED Magic Ball, 8ch | Base: 55)
+          - channel: 55
+            name: "Bola Disco RGB"
+            type: drgbw
+          - channel: 60
+            name: "Bola Disco Motor Rotacion"
+            type: dimmer
+          - channel: 61
+            name: "Bola Disco Strobe"
+            type: dimmer
+
+          # 8. Beam 02 (Mini Beam RGBW 12W 4-en-1, 6ch | Base: 63)
+          - channel: 63
+            name: "Beam 02"
+            type: dsrgbw
+          - channel: 64
+            name: "Beam 02 Strobe Canal"
+            type: dimmer
+
+          # 9. Pulpo 2 (Eurolite EL-LMH1240WB, 19ch | Base: 69)
+          - channel: 69
+            name: "Pulpo 2 Pan"
+            type: dimmer
+          - channel: 70
+            name: "Pulpo 2 Pan Fine"
+            type: dimmer
+          - channel: 71
+            name: "Pulpo 2 Tilt"
+            type: dimmer
+          - channel: 72
+            name: "Pulpo 2 Tilt Fine"
+            type: dimmer
+          - channel: 73
+            name: "Pulpo 2 Tilt Infinite Rot"
+            type: dimmer
+          - channel: 74
+            name: "Pulpo 2 Motor Speed"
+            type: dimmer
+          - channel: 75
+            name: "Pulpo 2 Master Dimmer"
+            type: dimmer
+          - channel: 76
+            name: "Pulpo 2 Strobe"
+            type: dimmer
+          - channel: 77
+            name: "Pulpo 2 Barra 1 RGBW"
+            type: rgbw
+          - channel: 81
+            name: "Pulpo 2 Barra 2 RGBW"
+            type: rgbw
+          - channel: 85
+            name: "Pulpo 2 Macro Effect"
+            type: dimmer
+          - channel: 86
+            name: "Pulpo 2 Effect Speed"
+            type: dimmer
+          - channel: 87
+            name: "Pulpo 2 Reset"
+            type: dimmer
+
+  # GRUPOS DE CONTROL DOMÓTICO / DISCO
+  - platform: group
+    name: "Grupo Tachos"
+    entities:
+      - light.tacho_escalera
+      - light.tacho_peces
+      - light.tacho_central
+      - light.tacho_plantas
+
+  - platform: group
+    name: "Grupo Beams"
+    entities:
+      - light.beam_01
+      - light.beam_02
+
+  - platform: group
+    name: "Grupo Pulpos LED"
+    entities:
+      - light.pulpo_1_barra_1_rgbw
+      - light.pulpo_1_barra_2_rgbw
+      - light.pulpo_2_barra_1_rgbw
+      - light.pulpo_2_barra_2_rgbw
+
+  - platform: group
+    name: "Todas Las Luces Disco"
+    entities:
+      - light.tacho_escalera
+      - light.tacho_peces
+      - light.tacho_central
+      - light.tacho_plantas
+      - light.beam_01
+      - light.beam_02
+      - light.bola_disco_rgb
+      - light.pulpo_1_barra_1_rgbw
+      - light.pulpo_1_barra_2_rgbw
+      - light.pulpo_2_barra_1_rgbw
+      - light.pulpo_2_barra_2_rgbw
