@@ -1,0 +1,18 @@
+[Unit]
+Description=InnerOS DMX & Art-Net Safe Local API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rlopez/projects/inneros-dmx-engine
+ExecStart=/usr/bin/python3 -m src.api_server
+Restart=always
+RestartSec=3
+Environment=DMX_API_HOST=127.0.0.1
+Environment=DMX_API_PORT=18796
+Environment=DMX_EXPOSE_TOPOLOGY=0
+EnvironmentFile=-%h/.config/inneros/dmx.env
+
+[Install]
+WantedBy=default.target
