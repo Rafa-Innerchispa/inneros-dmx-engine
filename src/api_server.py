@@ -4,17 +4,40 @@ Provides local HTTP endpoints for Voice Gateway, Home Assistant, and MCP.
 
 The API is loopback-only by default. Public consumers must go through the
 sanitized InnerOS MCP/WebMCP bridge rather than talking to the DMX node directly.
+
+Dynamic scenes are declarative and hot-reloaded from src/scenes.json on every
+status/apply call. They can use only bounded high-level lighting primitives.
 """
 
 import json
 import os
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from .effects_engine import DynamicEffectsRunner
+from .scene_registry import get_scene, load_scene_registry
 
 HOST = os.getenv("DMX_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("DMX_API_PORT", "18796"))
 CORS_ORIGIN = os.getenv("DMX_CORS_ORIGIN", "http://127.0.0.1").strip() or "http://127.0.0.1"
 EXPOSE_TOPOLOGY = os.getenv("DMX_EXPOSE_TOPOLOGY", "0").strip().lower() in {"1", "true", "yes"}
+
+# Public-safe built-ins. Raw DMX channels and fast strobe effects are intentionally
+# not exposed as public scene names.
+PUBLIC_BUILTIN_SCENES = [
+    "rainbow",
+    "frenzy",
+    "police",
+    "fire",
+    "chill_lounge",
+    "morado_uv",
+    "rojo_sangre",
+    "blackout",
+]
+STATIC_SCENE_ALIASES = {
+    "morado_uv": ("morado", "todas", 255),
+    "rojo_sangre": ("rojo", "todas", 255),
+}
+RUNNER_EFFECTS = {"rainbow", "frenzy", "police", "fire", "chill_lounge"}
 
 runner = DynamicEffectsRunner(
     target_ip=os.getenv("DMX_NODE_IP", "192.168.1.10"),
@@ -22,18 +45,78 @@ runner = DynamicEffectsRunner(
 )
 
 
+def scene_catalog() -> tuple[list[str], dict, list[dict]]:
+    dynamic, errors = load_scene_registry()
+    names = list(PUBLIC_BUILTIN_SCENES)
+    for name in sorted(dynamic):
+        if name not in names:
+            names.append(name)
+    catalog = {
+        name: {
+            "label": dynamic[name].get("label", name.replace("_", " ").title()),
+            "dynamic": True,
+        }
+        for name in dynamic
+    }
+    return names, catalog, errors
+
+
 def status_payload() -> dict:
-    """Return health data with topology hidden unless explicitly enabled."""
+    """Return health and hot-reloaded capabilities with topology hidden by default."""
+    supported_scenes, dynamic_catalog, registry_errors = scene_catalog()
     payload = {
         "ok": True,
         "status": "online",
         "current_effect": runner.current_effect,
         "running": runner.running,
+        "fixture_count": len(runner.engine.fixtures),
+        "supported_scenes": supported_scenes,
+        "dynamic_scenes": dynamic_catalog,
+        "scene_registry_ok": not registry_errors,
     }
+    if registry_errors:
+        payload["scene_registry_errors"] = registry_errors
     if EXPOSE_TOPOLOGY:
         payload["target_ip"] = runner.engine.node.target_ip
         payload["universe"] = runner.engine.node.universe
     return payload
+
+
+def execute_dynamic_scene(scene_name: str, definition: dict) -> dict:
+    """Execute a previously validated declarative scene synchronously and bounded."""
+    runner.stop_current_effect()
+    runner.current_effect = scene_name
+    runner.running = True
+    executed_steps = 0
+    try:
+        for _ in range(int(definition["loops"])):
+            for step in definition["steps"]:
+                color = step["color"]
+                brightness = int(step["brightness"])
+                target = step["target"]
+                if color == "blackout" or brightness <= 0:
+                    runner.engine.scene_blackout()
+                else:
+                    runner.apply_static_scene(
+                        color_name=color,
+                        brightness=brightness,
+                        target=target,
+                    )
+                    # apply_static_scene stops background effects; this scene is the
+                    # active synchronous execution, so restore truthful running state.
+                    runner.current_effect = scene_name
+                    runner.running = True
+                executed_steps += 1
+                time.sleep(int(step["duration_ms"]) / 1000.0)
+    finally:
+        runner.running = False
+    return {
+        "ok": True,
+        "effect": scene_name,
+        "dynamic": True,
+        "executed_steps": executed_steps,
+        "label": definition.get("label", scene_name),
+    }
 
 
 class DMXAPIHandler(BaseHTTPRequestHandler):
@@ -74,10 +157,25 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "action": "blackout"})
 
         elif path in {"/api/effect", "/api/scene"}:
-            mode = body.get("mode") or body.get("effect", "rainbow")
+            mode = str(body.get("mode") or body.get("effect", "rainbow")).strip().lower()
             speed = float(body.get("speed", 1.0))
-            runner.start_effect(mode, speed=speed)
-            self._send_json(200, {"ok": True, "effect": mode, "speed": speed})
+
+            dynamic = get_scene(mode)
+            if dynamic:
+                self._send_json(200, execute_dynamic_scene(mode, dynamic))
+            elif mode == "blackout":
+                runner.blackout()
+                self._send_json(200, {"ok": True, "effect": "blackout", "dynamic": False})
+            elif mode in STATIC_SCENE_ALIASES:
+                color, target, brightness = STATIC_SCENE_ALIASES[mode]
+                runner.apply_static_scene(color_name=color, target=target, brightness=brightness)
+                self._send_json(200, {"ok": True, "effect": mode, "dynamic": False})
+            elif mode in RUNNER_EFFECTS:
+                runner.start_effect(mode, speed=speed)
+                self._send_json(200, {"ok": True, "effect": mode, "speed": speed, "dynamic": False})
+            else:
+                supported, _, _ = scene_catalog()
+                self._send_json(400, {"ok": False, "error": "scene_not_supported", "supported_scenes": supported})
 
         elif path == "/api/color":
             color = body.get("color", "blanco")
