@@ -10,10 +10,12 @@ status/apply call. They can use only bounded high-level lighting primitives.
 """
 
 import json
+import math
 import os
+import re
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from .effects_engine import DynamicEffectsRunner
+from .effects_engine import DynamicEffectsRunner, COLOR_PALETTE
 from .scene_registry import get_scene, load_scene_registry, register_scene
 
 HOST = os.getenv("DMX_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -111,12 +113,17 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Endpoint not found"})
 
     def do_POST(self):
-        content_len = int(self.headers.get("Content-Length", 0))
-        post_data = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
         try:
+            content_len = int(self.headers.get("Content-Length", 0))
+            if not 0 <= content_len <= 16384:
+                raise ValueError("body_size")
+            post_data = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
             body = json.loads(post_data)
-        except Exception:
-            body = {}
+            if not isinstance(body, dict):
+                raise ValueError("object_required")
+        except (ValueError, UnicodeError):
+            self._send_json(400, {"ok": False, "error": "invalid_json_object"})
+            return
         path = self.path.split("?")[0]
 
         if path == "/api/scenes/register":
@@ -143,8 +150,18 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             runner.blackout()
             self._send_json(200, {"ok": True, "action": "blackout"})
         elif path in {"/api/effect", "/api/scene"}:
-            mode = str(body.get("mode") or body.get("effect", "rainbow")).strip().lower()
-            speed = float(body.get("speed", 1.0))
+            raw_mode = body.get("mode") or body.get("effect")
+            if not isinstance(raw_mode, str) or not raw_mode.strip():
+                self._send_json(400, {"ok": False, "error": "scene_required"})
+                return
+            mode = raw_mode.strip().lower()
+            try:
+                speed = float(body.get("speed", 1.0))
+                if not math.isfinite(speed) or not 0.2 <= speed <= 2.0:
+                    raise ValueError("speed")
+            except (ValueError, TypeError):
+                self._send_json(400, {"ok": False, "error": "invalid_speed"})
+                return
             dynamic = get_scene(mode)
             if dynamic:
                 self._send_json(200, execute_dynamic_scene(mode, dynamic))
@@ -162,14 +179,23 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
                 supported, _, _ = scene_catalog()
                 self._send_json(400, {"ok": False, "error": "scene_not_supported", "supported_scenes": supported})
         elif path == "/api/color":
-            color = body.get("color", "blanco")
-            target = body.get("target", "todas")
-            brightness = int(body.get("brightness", 255))
+            color = body.get("color")
+            target = body.get("target")
+            brightness = body.get("brightness")
+            allowed_targets = {"todas", "all", "tachos", "par", "beams", "beam", "pulpos", "spiders", *runner.engine.fixtures}
+            valid_color = isinstance(color, str) and (color in COLOR_PALETTE or re.fullmatch(r"#[0-9a-fA-F]{6}", color))
+            if not valid_color or not isinstance(target, str) or target not in allowed_targets or type(brightness) is not int or not 0 <= brightness <= 255:
+                self._send_json(400, {"ok": False, "error": "explicit_valid_color_target_brightness_required"})
+                return
             runner.apply_static_scene(color_name=color, brightness=brightness, target=target)
             self._send_json(200, {"ok": True, "color": color, "target": target, "brightness": brightness})
         elif path == "/api/intent":
-            text = body.get("text", "").lower()
-            self._send_json(200, self._parse_intent(text))
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip() or len(text) > 500:
+                self._send_json(400, {"ok": False, "error": "intent_text_required"})
+                return
+            result = self._parse_intent(text.lower())
+            self._send_json(200 if result.get("ok") else 422, result)
         else:
             self._send_json(404, {"error": "Invalid POST endpoint"})
 
@@ -205,8 +231,7 @@ class DMXAPIHandler(BaseHTTPRequestHandler):
             if col in text:
                 runner.apply_static_scene(color_name=col, brightness=255, target=target)
                 return {"ok": True, "parsed_action": f"color:{col}", "target": target, "text": text}
-        runner.apply_static_scene(color_name="blanco_calido", brightness=255, target=target)
-        return {"ok": True, "parsed_action": "color:blanco_calido", "target": target, "text": text}
+        return {"ok": False, "error": "intent_not_supported", "text": text}
 
 
 def build_server(host: str | None = None, port: int | None = None) -> HTTPServer:
